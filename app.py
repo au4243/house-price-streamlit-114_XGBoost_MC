@@ -211,9 +211,9 @@ if st.button("🚀 開始估價", type="primary"):
 if st.session_state.result is not None:
     result = st.session_state.result
     pred_price = result["predicted_price"]
-    ci_lower = result.get("ci_90_lower")
-    ci_upper = result.get("ci_90_upper")
-    ci_radius = result.get("ci_90_radius")
+    ci_lower = result["ci_90_lower"]
+    ci_upper = result["ci_90_upper"]
+    ci_radius = result["ci_90_radius"]
     confidence_pct = result.get("confidence_pct", 90)
 
     st.markdown("## 📝 中文估價說明")
@@ -226,28 +226,16 @@ if st.session_state.result is not None:
             value=f"{pred_price:.1f} 萬 / 坪",
         )
     with col2:
-        if ci_lower is not None and ci_upper is not None:
-            delta_text = f"±{ci_radius:.1f} 萬 / 坪" if ci_radius is not None else None
-            st.metric(
-                label=f"📊 {confidence_pct}% 信賴區間",
-                value=f"{ci_lower:.1f} ～ {ci_upper:.1f} 萬 / 坪",
-                delta=delta_text,
-                delta_color="off",
-            )
-        else:
-            st.metric(
-                label=f"📊 {confidence_pct}% 信賴區間",
-                value="尚未設定",
-            )
+        st.metric(
+            label=f"📊 {confidence_pct}% 信賴區間",
+            value=f"{ci_lower:.1f} ～ {ci_upper:.1f} 萬 / 坪",
+            delta=f"±{ci_radius:.1f} 萬 / 坪",
+            delta_color="off",
+        )
 
-    if ci_lower is not None and ci_upper is not None:
-        st.success(
-            f"💰 模型預估單價約 **{pred_price:.1f} 萬 / 坪**，"
-            f"{confidence_pct}% 信賴區間為 **{ci_lower:.1f} ～ {ci_upper:.1f} 萬 / 坪**。"
-        )
-    else:
-        st.success(
-            f"💰 模型最終預估單價：約 **{pred_price:.1f} 萬 / 坪**"
-        )
+    st.success(
+        f"💰 模型預估單價約 **{pred_price:.1f} 萬 / 坪**，"
+        f"{confidence_pct}% 信賴區間為 **{ci_lower:.1f} ～ {ci_upper:.1f} 萬 / 坪**。"
+    )
 else:
     st.info("👈 請先填寫左側資料，並點擊「開始估價」")
