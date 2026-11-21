@@ -1,5 +1,5 @@
 import streamlit as st
-from predict import HousePricePredictor
+from predict import HousePricePredictor, _safe_float
 
 # =========================
 # 頁面設定
@@ -210,14 +210,17 @@ if st.button("🚀 開始估價", type="primary"):
 # =========================
 if st.session_state.result is not None:
     result = st.session_state.result
-    pred_price = result["predicted_price"]
-    ci_lower = result["ci_90_lower"]
-    ci_upper = result["ci_90_upper"]
-    ci_radius = result["ci_90_radius"]
-    confidence_pct = result.get("confidence_pct", 90)
+    pred_price = _safe_float(result.get("predicted_price"), 0.0)
+    default_rad = max(0.5, pred_price * 0.10)
+    ci_lower = _safe_float(result.get("ci_90_lower"), max(0.0, pred_price - default_rad))
+    ci_upper = _safe_float(result.get("ci_90_upper"), max(ci_lower, pred_price + default_rad))
+    if ci_upper < ci_lower:
+        ci_lower, ci_upper = ci_upper, ci_lower
+    ci_radius = _safe_float(result.get("ci_90_radius"), (ci_upper - ci_lower) / 2.0)
+    confidence_pct = int(result.get("confidence_pct", 90))
 
     st.markdown("## 📝 中文估價說明")
-    st.text(result["explanation"])
+    st.text(result.get("explanation", ""))
 
     col1, col2 = st.columns(2)
     with col1:
