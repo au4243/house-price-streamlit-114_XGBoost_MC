@@ -167,6 +167,8 @@ building_age = st.sidebar.number_input("屋齡（年）", min_value=0, max_value
 building_area_ping = st.sidebar.number_input(
     "建物總面積（坪）", min_value=3.0, max_value=300.0, value=30.0, step=0.5
 )
+building_area_sqm = round(building_area_ping * 3.305785, 2)
+st.sidebar.caption(f"📐 換算建物總面積：{building_area_sqm:.2f} 平方公尺")
 
 
 main_area = st.sidebar.number_input("主建物面積（坪）", min_value=5.0, max_value=100.0, value=30.0, step=0.5)
