@@ -24,7 +24,7 @@ DISTRICT_ALIAS_MAP = {
 class HousePricePredictor:
     def __init__(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(base_dir, "xgb_cqr_house_price_model.pkl")
+        model_path = os.path.join(base_dir, "xgb_mc_house_price_model.pkl")
         feature_path = os.path.join(base_dir, "model_features.pkl")
 
         if not os.path.exists(model_path):
