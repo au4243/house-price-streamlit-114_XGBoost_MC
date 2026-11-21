@@ -159,9 +159,15 @@ building_type = st.sidebar.selectbox(
 main_use = st.sidebar.selectbox("主要用途", ["住家用", "商業用", "住商用"])
 building_age = st.sidebar.number_input("屋齡（年）", min_value=0, max_value=80, value=20, step=1)
 
-building_area_sqm = st.sidebar.number_input(
-    "建物總面積（平方公尺）", min_value=10.0, max_value=500.0, value=100.0, step=1.0
+#building_area_sqm = st.sidebar.number_input(
+#    "建物總面積（平方公尺）", min_value=10.0, max_value=500.0, value=100.0, step=1.0
+#)
+
+# 坪數與平方公尺連動參考（1 坪 ≈ 3.305785 平方公尺）
+building_area_ping = st.sidebar.number_input(
+    "建物總面積（坪）", min_value=3.0, max_value=300.0, value=30.0, step=0.5
 )
+
 
 main_area = st.sidebar.number_input("主建物面積（坪）", min_value=5.0, max_value=100.0, value=30.0, step=0.5)
 balcony_area = st.sidebar.number_input("陽台面積（坪）", min_value=0.0, max_value=20.0, value=5.0, step=0.5)
