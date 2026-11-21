@@ -4,6 +4,7 @@ import joblib
 import shap
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 
 
 BUILDING_TYPE_MAP = {
@@ -68,7 +69,9 @@ class HousePricePredictor:
         if self.base_model is None or not hasattr(self.base_model, "predict"):
             raise ValueError("❌ 模型檔中找不到可用的主預測模型（base_model）")
 
-        self.explainer, self.base_value = self._init_shap_explainer(self.base_model)
+        self.explainer, self.base_value, self.init_shap_err = self._init_shap_explainer(
+            self.base_model
+        )
 
     @staticmethod
     def _is_predictor(obj):
@@ -205,18 +208,69 @@ class HousePricePredictor:
         return float(squeezed)
 
     def _init_shap_explainer(self, model):
+        errors = []
+        # 嘗試 1：直接用 TreeExplainer 包模型
         try:
             explainer = shap.TreeExplainer(model)
             base_val = self._parse_base_value(explainer.expected_value)
-            return explainer, base_val
-        except Exception:
+            return explainer, base_val, ""
+        except Exception as e1:
+            errors.append(f"TreeExplainer(model): {type(e1).__name__}: {e1}")
+
+        # 嘗試 2：取出底層 booster 再用 TreeExplainer
+        try:
+            booster = model.get_booster() if hasattr(model, "get_booster") else model
+            explainer = shap.TreeExplainer(booster)
+            base_val = self._parse_base_value(explainer.expected_value)
+            return explainer, base_val, ""
+        except Exception as e2:
+            errors.append(f"TreeExplainer(booster): {type(e2).__name__}: {e2}")
+
+        return None, 0.0, " | ".join(errors)
+
+    def _get_shap_or_contrib(self, X, fallback_pred):
+        """
+        回傳 (shap_vals_1d, base_val, err_msg)
+        若 shap.TreeExplainer 失敗，自動改用 XGBoost 原生 pred_contribs 計算特徵貢獻度。
+        """
+        X_num = X.astype(np.float32)
+
+        if self.explainer is not None:
             try:
-                booster = model.get_booster() if hasattr(model, "get_booster") else model
-                explainer = shap.TreeExplainer(booster)
-                base_val = self._parse_base_value(explainer.expected_value)
-                return explainer, base_val
-            except Exception:
-                return None, 0.0
+                sv = self.explainer(X_num)
+                vals = np.asarray(sv.values, dtype=float)
+                if vals.ndim == 2:
+                    vals = vals[0]
+                elif vals.ndim == 3:
+                    vals = vals[0, :, 0]
+                if vals.shape[0] == X_num.shape[1]:
+                    return vals, _safe_float(self.base_value, fallback_pred), ""
+            except Exception as e_call:
+                shap_err = f"explainer(X): {type(e_call).__name__}: {e_call}"
+            else:
+                shap_err = "shap_values 形狀與特徵數不符"
+        else:
+            shap_err = self.init_shap_err or "TreeExplainer 未初始化成功"
+
+        # 備援方案：XGBoost 原生 pred_contribs（最後一欄為 bias / base value）
+        try:
+            booster = (
+                self.base_model.get_booster()
+                if hasattr(self.base_model, "get_booster")
+                else (self.base_model if isinstance(self.base_model, xgb.Booster) else None)
+            )
+            if booster is not None:
+                dmat = xgb.DMatrix(X_num, feature_names=list(X_num.columns))
+                contribs = booster.predict(dmat, pred_contribs=True)
+                contribs = np.asarray(contribs, dtype=float)[0]
+                feat_contribs = contribs[:-1]
+                bias_val = float(contribs[-1])
+                if feat_contribs.shape[0] == X_num.shape[1]:
+                    return feat_contribs, bias_val, ""
+        except Exception as e_xgb:
+            return None, fallback_pred, f"{shap_err} | pred_contribs: {type(e_xgb).__name__}: {e_xgb}"
+
+        return None, fallback_pred, shap_err
 
     def _normalize_case(self, case_dict):
         normalized = dict(case_dict)
@@ -241,6 +295,8 @@ class HousePricePredictor:
             if aligned[col].dtype == "bool":
                 aligned[col] = aligned[col].astype(int)
             elif pd.api.types.is_numeric_dtype(aligned[col]):
+                aligned[col] = pd.to_numeric(aligned[col], errors="coerce").fillna(0.0)
+            else:
                 aligned[col] = pd.to_numeric(aligned[col], errors="coerce").fillna(0.0)
         return aligned
 
@@ -330,43 +386,38 @@ class HousePricePredictor:
         half_width = _safe_float(half_width, (upper_bound - lower_bound) / 2.0)
 
         explanation_lines = []
-        if self.explainer is not None:
-            try:
-                shap_values = self.explainer(X)
-                shap_vals = np.asarray(shap_values.values)[0]
-                feature_names = X.columns
-                base_value = _safe_float(self.base_value, 0.0)
+        shap_vals, base_value, shap_err = self._get_shap_or_contrib(X, pred)
 
-                explanation_lines.append(
-                    f"📌 模型基準單價約為 {base_value:.1f} 萬 / 坪，以下條件使價格進行調整："
-                )
+        if shap_vals is not None:
+            feature_names = X.columns
+            explanation_lines.append(
+                f"📌 模型基準單價約為 {base_value:.1f} 萬 / 坪，以下條件使價格進行調整："
+            )
 
-                idx_sorted = np.argsort(np.abs(shap_vals))[::-1]
-                shown_count = 0
-                for i in idx_sorted:
-                    feat = feature_names[i]
-                    val = X.iloc[0][feat]
-                    shap_val = _safe_float(shap_vals[i], 0.0)
-                    if val == 0 and feat.startswith(
-                        ("district_", "building_type_", "main_use_")
-                    ):
-                        continue
-                    human_text = self._feature_to_human(feat, val)
-                    direction = "推升" if shap_val > 0 else "下修"
-                    explanation_lines.append(
-                        f"👉 {human_text}，使單價約 {direction} {abs(shap_val):.1f} 萬 / 坪"
-                    )
-                    shown_count += 1
-                    if shown_count >= 10:
-                        break
-            except Exception:
+            idx_sorted = np.argsort(np.abs(shap_vals))[::-1]
+            shown_count = 0
+            for i in idx_sorted:
+                feat = feature_names[i]
+                val = X.iloc[0][feat]
+                shap_val = _safe_float(shap_vals[i], 0.0)
+                if val == 0 and feat.startswith(
+                    ("district_", "building_type_", "main_use_")
+                ):
+                    continue
+                human_text = self._feature_to_human(feat, val)
+                direction = "推升" if shap_val > 0 else "下修"
                 explanation_lines.append(
-                    "📌 目前環境無法產生 SHAP 細項拆解，直接顯示模型預測結果："
+                    f"👉 {human_text}，使單價約 {direction} {abs(shap_val):.1f} 萬 / 坪"
                 )
+                shown_count += 1
+                if shown_count >= 10:
+                    break
         else:
             explanation_lines.append(
                 "📌 目前環境無法產生 SHAP 細項拆解，直接顯示模型預測結果："
             )
+            if shap_err:
+                explanation_lines.append(f"（除錯原因：{shap_err}）")
 
         explanation_lines.append(
             f"\n➡️ 綜合以上因素後，模型推估本案合理單價約為 {pred:.1f} 萬 / 坪。"
